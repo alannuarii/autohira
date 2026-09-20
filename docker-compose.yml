@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  autohira:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autohira-app
+    restart: always
+    ports:
+      - "3023:3000"
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - postgres-net
+
+networks:
+  default:
+  postgres-net:
+    external: true
