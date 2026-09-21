@@ -12,8 +12,12 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
+RUN apk add --no-cache curl
+
 COPY --from=builder /app/.output ./.output
 COPY --from=builder /app/package*.json ./
+RUN npm ci --omit=dev
 
 EXPOSE 3000
 CMD ["node", ".output/server/index.mjs"]
+

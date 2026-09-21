@@ -2,8 +2,10 @@ pipeline {
     agent any
 
     environment {
-        CONTAINER_NAME = 'autohira'
-        PORT_MAPPING = '3023:3000'
+        CONTAINER_NAME = 'autohira-app'
+        IMAGE_NAME     = 'autohira:latest'
+        PORT_MAPPING   = '3023:3000'
+        NETWORK_NAME   = 'postgres-net'
     }
 
     stages {
@@ -25,21 +27,52 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build --no-cache -t autohira:latest .'
+                sh 'docker build --no-cache -t ${IMAGE_NAME} .'
             }
         }
 
         stage('Deploy Container') {
             steps {
-                sh 'docker rm -f autohira-app || true'
-                sh 'docker run -d --name autohira-app --restart always -p 3023:3000 --env-file .env --add-host host.docker.internal:host-gateway --network postgres-net autohira:latest'
+                sh 'docker rm -f ${CONTAINER_NAME} || true'
+                sh 'docker run -d --name ${CONTAINER_NAME} --restart always -p ${PORT_MAPPING} --env-file .env --add-host host.docker.internal:host-gateway --network ${NETWORK_NAME} ${IMAGE_NAME}'
             }
         }
 
         stage('Healthcheck') {
             steps {
-                sleep 5
-                sh 'curl -f http://localhost:3023/api/health || exit 1'
+                script {
+                    echo "Checking container status and health endpoint..."
+                    sh '''
+                        SUCCESS=false
+                        for i in $(seq 1 10); do
+                            # Pastikan container berstatus running
+                            STATUS=$(docker inspect -f '{{.State.Status}}' ${CONTAINER_NAME} 2>/dev/null || echo "not_found")
+                            if [ "$STATUS" != "running" ]; then
+                                echo "Container tidak dalam status running! Status: $STATUS"
+                                echo "=== CONTAINER LOGS ==="
+                                docker logs ${CONTAINER_NAME} || true
+                                exit 1
+                            fi
+
+                            # Cek endpoint health via docker exec (internal port 3000)
+                            if docker exec ${CONTAINER_NAME} curl -s -f http://localhost:3000/api/health > /dev/null 2>&1 || \
+                               docker exec ${CONTAINER_NAME} wget -qO- http://localhost:3000/api/health > /dev/null 2>&1; then
+                                echo "Healthcheck berhasil! Aplikasi aktif dan merespons."
+                                SUCCESS=true
+                                break
+                            fi
+
+                            echo "Menunggu aplikasi siap ($i/10)..."
+                            sleep 3
+                        done
+
+                        if [ "$SUCCESS" != "true" ]; then
+                            echo "Healthcheck timeout! Menampilkan log container:"
+                            docker logs ${CONTAINER_NAME}
+                            exit 1
+                        fi
+                    '''
+                }
             }
         }
     }
