@@ -54,7 +54,7 @@ export interface ExcelExportPayload {
 }
 
 let cachedTemplateBuffer: Buffer | null = null;
-const DEFAULT_TEMPLATE_URL = "https://aurastorage.serveer.biz.id/api/files/e67066d1-5087-4736-b3bb-722b36ea3b94.xlsx";
+const DEFAULT_TEMPLATE_URL = "https://aurastorage.serveer.biz.id/api/files/a2736e78-c1fb-4858-9643-a7ada31e3176.xlsx";
 
 export async function getTemplateBuffer(): Promise<Buffer> {
   if (cachedTemplateBuffer) {
