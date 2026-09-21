@@ -148,18 +148,20 @@ export async function generateHiradcExcel(payload: ExcelExportPayload): Promise<
   ws.getCell("E5").value = `: ${header.penanggungJawab || "Team Leader Pemeliharaan"}`;
   ws.getCell("X5").value = "1 dari 1";
 
-  // 2. CONTOH STYLE DARI BARIS 13 UNTUK BARIS DATA BARU
+  // 2. AMBIL CONTOH ALIGNMENT DARI BARIS 13 TEMPLATE
   const baseRow = ws.getRow(13);
-  const colStyles: Array<{ font?: any; alignment?: any; border?: any; fill?: any }> = [];
+  const colAlignments: Array<any> = [];
   for (let c = 2; c <= 24; c++) {
-    const cell = baseRow.getCell(c);
-    colStyles[c] = {
-      font: cell.font,
-      alignment: cell.alignment,
-      border: cell.border,
-      fill: cell.fill,
-    };
+    colAlignments[c] = baseRow.getCell(c).alignment;
   }
+
+  const thinBorder = { style: "thin" as const };
+  const fullCellBorder: Partial<ExcelJS.Borders> = {
+    top: thinBorder,
+    bottom: thinBorder,
+    left: thinBorder,
+    right: thinBorder,
+  };
 
   // 3. ISI BARIS DATA HIRADC
   for (let i = 0; i < N; i++) {
@@ -170,15 +172,14 @@ export async function generateHiradcExcel(payload: ExcelExportPayload): Promise<
     // Reset tinggi baris agar Excel menghitung auto-fit secara dinamis (tidak terpotong)
     row.height = undefined;
 
-    // Terapkan style template ke setiap sel, dengan font non-bold untuk baris data
+    // Terapkan style mandiri (decoupled) ke setiap sel data dengan border tipis lengkap
     for (let c = 2; c <= 24; c++) {
       const cell = row.getCell(c);
-      if (colStyles[c]) {
-        cell.font = { ...colStyles[c].font, bold: false };
-        cell.alignment = colStyles[c].alignment;
-        cell.border = colStyles[c].border;
-        cell.fill = colStyles[c].fill;
-      }
+      cell.style = {
+        font: { name: "Arial Narrow", size: 10, bold: false },
+        alignment: colAlignments[c] || { vertical: "middle", wrapText: true },
+        border: { ...fullCellBorder },
+      };
     }
 
     // Format rencana aksi kolom X (fallback cerdas jika kosong)
@@ -222,20 +223,31 @@ export async function generateHiradcExcel(payload: ExcelExportPayload): Promise<
     const cellC = ws.getCell(13, 3);
     cellC.value = mainActivityTitle || header.divisiAktivitas || "";
     cellC.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-    setBoxBorder(ws, 13, 3, 13 + N - 1, 3);
+    for (let r = 13; r <= 13 + N - 1; r++) {
+      ws.getCell(r, 3).style = {
+        font: { name: "Arial Narrow", size: 10, bold: false },
+        alignment: { vertical: "middle", horizontal: "center", wrapText: true },
+        border: {
+          top: r === 13 ? thinBorder : undefined,
+          bottom: r === 13 + N - 1 ? thinBorder : undefined,
+          left: thinBorder,
+          right: thinBorder,
+        },
+      };
+    }
   }
 
   // 4. SUSUN FOOTER (CATATAN & 3 BLOK PENGESAHAN) SECARA PRESISI
   const baseOffset = 13 + N;
 
-  // Bersihkan seluruh sel footer dari sisa teks template lama dan border rusak
+  // Bersihkan seluruh sel footer dari sisa teks template lama dan putus referensi style bersama
   for (let r = baseOffset; r <= baseOffset + 8; r++) {
     const row = ws.getRow(r);
     row.height = undefined;
     for (let c = 1; c <= 25; c++) {
       const cell = row.getCell(c);
       cell.value = null;
-      cell.border = {};
+      cell.style = {}; // Putus shared style reference dari template
     }
   }
 
