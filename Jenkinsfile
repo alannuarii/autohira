@@ -25,14 +25,14 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker compose build --no-cache'
+                sh 'docker-compose build --no-cache'
             }
         }
 
         stage('Deploy Container') {
             steps {
-                sh 'docker compose down || true'
-                sh 'docker compose up -d'
+                sh 'docker-compose down || true'
+                sh 'docker-compose up -d'
             }
         }
 
