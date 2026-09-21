@@ -25,14 +25,14 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker-compose build --no-cache'
+                sh 'docker build --no-cache -t autohira:latest .'
             }
         }
 
         stage('Deploy Container') {
             steps {
-                sh 'docker-compose down || true'
-                sh 'docker-compose up -d'
+                sh 'docker rm -f autohira-app || true'
+                sh 'docker run -d --name autohira-app --restart always -p 3023:3000 --env-file .env --add-host host.docker.internal:host-gateway --network postgres-net autohira:latest'
             }
         }
 
