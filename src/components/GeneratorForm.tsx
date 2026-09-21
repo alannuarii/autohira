@@ -190,40 +190,64 @@ export default function GeneratorForm(props: GeneratorFormProps) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let buffer = "";
+      let isCompleted = false;
+
+      const processEventBlock = (block: string) => {
+        const lines = block.split(/\r?\n/);
+        let eventType = "message";
+        const dataLines: string[] = [];
+
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            eventType = line.substring(6).trim();
+          } else if (line.startsWith("data:")) {
+            dataLines.push(line.substring(5).trim());
+          }
+        }
+
+        const dataStr = dataLines.join("\n");
+        if (!dataStr) return;
+
+        try {
+          const data = JSON.parse(dataStr);
+          if (eventType === "progress") {
+            props.onGenerateIkProgress(data.batchIndex, data.totalBatches);
+          } else if (eventType === "complete") {
+            isCompleted = true;
+            props.onGenerateIkComplete(data);
+          } else if (eventType === "error") {
+            isCompleted = true;
+            props.onGenerateIkError(data.message || "Gagal memproses analisis IK");
+          }
+        } catch (err) {
+          console.error("Error parsing SSE data:", err, dataStr);
+        }
+      };
 
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
-        
+        if (done) {
+          if (buffer.trim()) {
+            processEventBlock(buffer);
+          }
+          break;
+        }
+
         buffer += decoder.decode(value, { stream: true });
-        
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ""; // Sisa teks yang belum lengkap
 
-        let currentEvent = "";
+        // SSE memisahkan blok event dengan double-newline
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() || ""; // Sisa block yang belum lengkap
 
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            currentEvent = line.substring(7).trim();
-          } else if (line.startsWith("data: ")) {
-            const dataStr = line.substring(6).trim();
-            if (!dataStr) continue;
-            
-            try {
-              const data = JSON.parse(dataStr);
-              
-              if (currentEvent === "progress") {
-                props.onGenerateIkProgress(data.batchIndex, data.totalBatches);
-              } else if (currentEvent === "complete") {
-                props.onGenerateIkComplete(data);
-              } else if (currentEvent === "error") {
-                props.onGenerateIkError(data.message);
-              }
-            } catch (err) {
-              console.error("Error parsing SSE data", err);
-            }
+        for (const block of blocks) {
+          if (block.trim()) {
+            processEventBlock(block);
           }
         }
+      }
+
+      if (!isCompleted) {
+        props.onGenerateIkError("Koneksi terputus sebelum proses analisis IK selesai.");
       }
     } catch (error) {
       props.onGenerateIkError(error instanceof Error ? error.message : "Terjadi kesalahan koneksi SSE");
