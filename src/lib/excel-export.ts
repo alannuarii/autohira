@@ -86,6 +86,21 @@ export async function getTemplateBuffer(): Promise<Buffer> {
   }
 }
 
+const setBoxBorder = (ws: ExcelJS.Worksheet, r1: number, c1: number, r2: number, c2: number) => {
+  const thin = { style: "thin" as const };
+  for (let r = r1; r <= r2; r++) {
+    for (let c = c1; c <= c2; c++) {
+      const cell = ws.getCell(r, c);
+      cell.border = {
+        top: r === r1 ? thin : undefined,
+        bottom: r === r2 ? thin : undefined,
+        left: c === c1 ? thin : undefined,
+        right: c === c2 ? thin : undefined,
+      };
+    }
+  }
+};
+
 export async function generateHiradcExcel(payload: ExcelExportPayload): Promise<Buffer> {
   const templateBuffer = await getTemplateBuffer();
 
@@ -99,43 +114,25 @@ export async function generateHiradcExcel(payload: ExcelExportPayload): Promise<
   const { header, signOff, items, mainActivityTitle } = payload;
   const N = items.length;
 
+  // Unmerge semua merge lama di area footer (baris >= 21) agar tidak rusak saat spliceRows
+  for (const key of Object.keys(ws._merges)) {
+    const match = key.match(/\d+/g);
+    if (match && match.some((n) => parseInt(n, 10) >= 21)) {
+      try {
+        ws.unMergeCells(key);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   // Sesuaikan jumlah baris data (template asli memiliki 8 baris kosong: baris 13-20)
   if (N > 8) {
     // Sisipkan baris kosong sebelum baris 21 (catatan)
     ws.spliceRows(21, 0, ...Array(N - 8).fill([]));
   } else if (N < 8 && N > 0) {
-    // Unmerge footer merges sebelum baris dihapus agar ExcelJS tidak membatalkan atau merusak merge
-    for (const key of Object.keys(ws._merges)) {
-      const rowNum = parseInt(key.replace(/\D/g, ""), 10);
-      if (rowNum >= 21) {
-        ws.unMergeCells(key);
-      }
-    }
-
     // Hapus sisa baris kosong jika jumlah item kurang dari 8
     ws.spliceRows(13 + N, 8 - N);
-
-    // Pasang kembali merge blok pengesahan pada posisi baris yang baru
-    const baseOffset = 13 + N;
-    ws.mergeCells(baseOffset, 10, baseOffset, 16);     // Header Disahkan
-    ws.mergeCells(baseOffset, 17, baseOffset, 20);     // Header Diperiksa
-    ws.mergeCells(baseOffset, 21, baseOffset, 24);     // Header Dibuat
-
-    ws.mergeCells(baseOffset + 1, 10, baseOffset + 3, 16); // Area TTD Disahkan
-    ws.mergeCells(baseOffset + 1, 17, baseOffset + 3, 20); // Area TTD Diperiksa
-    ws.mergeCells(baseOffset + 1, 21, baseOffset + 3, 24); // Area TTD Dibuat
-
-    ws.mergeCells(baseOffset + 4, 10, baseOffset + 4, 16); // Nama Disahkan
-    ws.mergeCells(baseOffset + 4, 17, baseOffset + 4, 20); // Nama Diperiksa
-    ws.mergeCells(baseOffset + 4, 21, baseOffset + 4, 24); // Nama Dibuat
-
-    ws.mergeCells(baseOffset + 5, 10, baseOffset + 5, 16); // Jabatan Disahkan
-    ws.mergeCells(baseOffset + 5, 17, baseOffset + 5, 20); // Jabatan Diperiksa
-    ws.mergeCells(baseOffset + 5, 21, baseOffset + 5, 24); // Jabatan Dibuat
-
-    ws.mergeCells(baseOffset + 6, 10, baseOffset + 6, 16); // Tanggal Disahkan
-    ws.mergeCells(baseOffset + 6, 17, baseOffset + 6, 20); // Tanggal Diperiksa
-    ws.mergeCells(baseOffset + 6, 21, baseOffset + 6, 24); // Tanggal Dibuat
   }
 
   // 1. ISI HEADER DOKUMEN (Menggantikan nilai XXX)
@@ -225,29 +222,114 @@ export async function generateHiradcExcel(payload: ExcelExportPayload): Promise<
     const cellC = ws.getCell(13, 3);
     cellC.value = mainActivityTitle || header.divisiAktivitas || "";
     cellC.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    setBoxBorder(ws, 13, 3, 13 + N - 1, 3);
   }
 
-  // 4. ISI FOOTER PENGESAHAN (Menggantikan nilai XXX pada blok tanda tangan)
+  // 4. SUSUN FOOTER (CATATAN & 3 BLOK PENGESAHAN) SECARA PRESISI
   const baseOffset = 13 + N;
-  const nameRow = baseOffset + 4;
-  const jabRow = baseOffset + 5;
-  const dateRow = baseOffset + 6;
 
-  // Nama Pejabat
-  ws.getCell(`J${nameRow}`).value = signOff.disahkanNama || "Aries Indrianto Elisa";
-  ws.getCell(`Q${nameRow}`).value = signOff.diperiksaNama || "Jamal Idris";
-  ws.getCell(`U${nameRow}`).value = signOff.dibuatNama || header.penanggungJawab || "Alan Nuari";
+  // Bersihkan seluruh sel footer dari sisa teks template lama dan border rusak
+  for (let r = baseOffset; r <= baseOffset + 8; r++) {
+    const row = ws.getRow(r);
+    row.height = undefined;
+    for (let c = 1; c <= 25; c++) {
+      const cell = row.getCell(c);
+      cell.value = null;
+      cell.border = {};
+    }
+  }
 
-  // Jabatan Pejabat
-  ws.getCell(`J${jabRow}`).value = signOff.disahkanJabatan || "Manager UP Minahasa";
-  ws.getCell(`Q${jabRow}`).value = signOff.diperiksaJabatan || "Manager ULPLTD Tahuna";
-  ws.getCell(`U${jabRow}`).value = signOff.dibuatJabatan || "Team Leader Pemeliharaan";
+  const fontBase = { name: "Arial Narrow", size: 10 };
 
-  // Tanggal
+  // --- A. BLOK CATATAN (Kolom B s/d I, Kolom 2 s/d 9) ---
+  const catatanLines = [
+    { text: "Catatan:", bold: true, size: 10 },
+    { text: "Kondisi: R (Rutin); NR (Non rutin); N (Normal); AN (Abnormal); E (Emergency)", bold: false, size: 9 },
+    { text: "Keparahan: DL (Dampak Lingkungan); CM (Cedera Manusia); SL (Sanksi Lingkungan); AS (Aset); MAX (Maximal)", bold: false, size: 9 },
+    { text: "Kategori Risiko: I = Rendah; II = Menengah; III = Tinggi; IV = Sangat Tinggi; V = Ekstrim", bold: false, size: 9 },
+    { text: "", bold: false, size: 9 },
+    { text: "", bold: false, size: 9 },
+    { text: "", bold: false, size: 9 },
+  ];
+
+  for (let i = 0; i < 7; i++) {
+    const r = baseOffset + i;
+    ws.mergeCells(r, 2, r, 9);
+    const cell = ws.getCell(r, 2);
+    cell.value = catatanLines[i].text;
+    cell.font = { name: fontBase.name, bold: catatanLines[i].bold, size: catatanLines[i].size };
+    cell.alignment = { vertical: "middle", horizontal: "left" };
+  }
+  setBoxBorder(ws, baseOffset, 2, baseOffset + 6, 9);
+
+  // --- B. BLOK PENGESAHAN (Kolom J s/d X, 3 Kolom) ---
   const defaultDateStr = new Date().toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
-  ws.getCell(`J${dateRow}`).value = `Tanggal: ${signOff.disahkanTanggal || defaultDateStr}`;
-  ws.getCell(`Q${dateRow}`).value = `Tanggal: ${signOff.diperiksaTanggal || defaultDateStr}`;
-  ws.getCell(`U${dateRow}`).value = `Tanggal: ${signOff.dibuatTanggal || defaultDateStr}`;
+  const signBlocks = [
+    {
+      header: "Disahkan Oleh,",
+      name: signOff.disahkanNama || "Aries Indrianto Elisa",
+      jabatan: signOff.disahkanJabatan || "Manager UP Minahasa",
+      tanggal: `Tanggal: ${signOff.disahkanTanggal || defaultDateStr}`,
+      startCol: 10,
+      endCol: 16, // Kolom J - P
+    },
+    {
+      header: "Diperiksa Oleh,",
+      name: signOff.diperiksaNama || "Jamal Idris",
+      jabatan: signOff.diperiksaJabatan || "Manager ULPLTD Tahuna",
+      tanggal: `Tanggal: ${signOff.diperiksaTanggal || defaultDateStr}`,
+      startCol: 17,
+      endCol: 20, // Kolom Q - T
+    },
+    {
+      header: "Dibuat Oleh,",
+      name: signOff.dibuatNama || header.penanggungJawab || "Alan Nuari",
+      jabatan: signOff.dibuatJabatan || "Team Leader Pemeliharaan",
+      tanggal: `Tanggal: ${signOff.dibuatTanggal || defaultDateStr}`,
+      startCol: 21,
+      endCol: 24, // Kolom U - X
+    },
+  ];
+
+  for (const block of signBlocks) {
+    const { header: bHeader, name, jabatan, tanggal, startCol, endCol } = block;
+
+    // 1. Header (Disahkan Oleh, / Diperiksa Oleh, / Dibuat Oleh,)
+    ws.mergeCells(baseOffset, startCol, baseOffset, endCol);
+    const cHead = ws.getCell(baseOffset, startCol);
+    cHead.value = bHeader;
+    cHead.font = { name: fontBase.name, size: 10, bold: false };
+    cHead.alignment = { vertical: "middle", horizontal: "center" };
+    setBoxBorder(ws, baseOffset, startCol, baseOffset, endCol);
+
+    // 2. Area Tanda Tangan (3 baris kosong)
+    ws.mergeCells(baseOffset + 1, startCol, baseOffset + 3, endCol);
+    setBoxBorder(ws, baseOffset + 1, startCol, baseOffset + 3, endCol);
+
+    // 3. Nama Pejabat (Bold + Underline)
+    ws.mergeCells(baseOffset + 4, startCol, baseOffset + 4, endCol);
+    const cName = ws.getCell(baseOffset + 4, startCol);
+    cName.value = name;
+    cName.font = { name: fontBase.name, size: 10, bold: true, underline: true };
+    cName.alignment = { vertical: "middle", horizontal: "center" };
+    setBoxBorder(ws, baseOffset + 4, startCol, baseOffset + 4, endCol);
+
+    // 4. Jabatan Pejabat (Bold)
+    ws.mergeCells(baseOffset + 5, startCol, baseOffset + 5, endCol);
+    const cJab = ws.getCell(baseOffset + 5, startCol);
+    cJab.value = jabatan;
+    cJab.font = { name: fontBase.name, size: 10, bold: true };
+    cJab.alignment = { vertical: "middle", horizontal: "center" };
+    setBoxBorder(ws, baseOffset + 5, startCol, baseOffset + 5, endCol);
+
+    // 5. Tanggal
+    ws.mergeCells(baseOffset + 6, startCol, baseOffset + 6, endCol);
+    const cDate = ws.getCell(baseOffset + 6, startCol);
+    cDate.value = tanggal;
+    cDate.font = { name: fontBase.name, size: 9 };
+    cDate.alignment = { vertical: "middle", horizontal: "center" };
+    setBoxBorder(ws, baseOffset + 6, startCol, baseOffset + 6, endCol);
+  }
 
   // Tulis workbook ke buffer
   const buffer = await wb.xlsx.writeBuffer();
