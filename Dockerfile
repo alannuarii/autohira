@@ -2,7 +2,11 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+# Konfigurasi retry untuk mencegah kegagalan akibat transient network error (ECONNRESET)
+RUN npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && (npm ci || (sleep 3 && npm ci) || (sleep 5 && npm ci))
 COPY . .
 RUN npm run build
 
@@ -17,7 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 
 COPY --from=builder /app/.output ./.output
 COPY --from=builder /app/package*.json ./
-RUN npm ci --omit=dev
+RUN npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && (npm ci --omit=dev || (sleep 3 && npm ci --omit=dev) || (sleep 5 && npm ci --omit=dev))
 
 EXPOSE 3000
 CMD ["node", ".output/server/index.mjs"]
